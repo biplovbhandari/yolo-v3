@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# pycharm project
+.idea/
+
+# model weights
+weights/
