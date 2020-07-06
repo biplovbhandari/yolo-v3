@@ -1,2 +1,5 @@
 # yolo-v3
-yolo-v3 keras implementations
+
+Training and Detecting Objects with YOLO3
+
+reusing some of codes from experiencor/keras-yolo3 repo.
