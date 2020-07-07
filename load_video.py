@@ -3,11 +3,14 @@
 # load yolov3 model and perform object detection
 # based on https://github.com/experiencor/keras-yolo3
 import argparse
+import cv2
+import tensorflow as tf
+import time
 from matplotlib import pyplot
 from matplotlib.patches import Rectangle
-import tensorflow as tf
 from tensorflow.keras import models
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from PIL import Image
 
 
 class BoundBox:
@@ -135,9 +138,12 @@ def get_boxes(boxes, labels, thresh):
 
 
 # draw all results
-def draw_boxes(filename, v_boxes, v_labels, v_scores):
+def draw_boxes(img, v_boxes, v_labels, v_scores):
     # load the image
-    data = pyplot.imread(filename)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    print(f'img: {img}')
+    data = Image.fromarray(img)
+    print(f'data: {data}')
     # plot the image
     pyplot.imshow(data)
     # get the context for drawing boxes
@@ -161,23 +167,26 @@ def draw_boxes(filename, v_boxes, v_labels, v_scores):
 
 
 # load and prepare an image
-def load_image_pixels(filename, shape):
-    # load the image to get its shape
-    image = load_img(filename)
-    width, height = image.size
-    # load the image with the required size
-    image = load_img(filename, target_size=shape)
-    # convert to numpy array
-    image = img_to_array(image)
-    # scale pixel values to [0, 1]
-    image = image.astype('float32')
-    image /= 255.0
+def load_image_pixels(image, shape):
+    width, height = image.shape[0:1][0], image.shape[1:2][0]
     # add a dimension so that we have one sample
     image = tf.expand_dims(image, 0)
+    # load the image with the required size
+    image = tf.image.resize(image, shape)
+    # convert to numpy array
+    # image = img_to_array(image)
+    # scale pixel values to [0, 1]
+    image /= 255.0
     return image, width, height
 
 
-def load_image(model, image_path):
+def transform_images(x_train, size):
+    x_train = tf.image.resize(x_train, (size, size))
+    x_train = x_train / 255
+    return x_train
+
+
+def start_camera(video):
     # labels
     labels = ['person', 'bicycle', 'car', 'motorbike', 'aeroplane', 'bus', 'train', 'truck',
               'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench',
@@ -189,44 +198,75 @@ def load_image(model, image_path):
               'chair', 'sofa', 'pottedplant', 'bed', 'diningtable', 'toilet', 'tvmonitor', 'laptop', 'mouse',
               'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator',
               'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
+
     # define the expected input shape for the model
     input_w, input_h = 416, 416
-    # load and prepare image
-    image, image_w, image_h = load_image_pixels(image_path, (input_w, input_h))
 
-    # make prediction
-    yhat = model.predict(image)
-    # summarize the shape of the list of arrays
-    print([a.shape for a in yhat])
     # define the anchors
     anchors = [[116, 90, 156, 198, 373, 326], [30, 61, 62, 45, 59, 119], [10, 13, 16, 30, 33, 23]]
-    # define the probability threshold for detected objects
-    class_threshold = 0.6
-    boxes = list()
-    for i in range(len(yhat)):
-        # decode the output of the network
-        boxes += decode_netout(yhat[i][0], anchors[i], class_threshold, input_h, input_w)
-    # correct the sizes of the bounding boxes for the shape of the image
-    correct_yolo_boxes(boxes, image_h, image_w, input_h, input_w)
-    # suppress non-maximal boxes
-    do_nms(boxes, 0.5)
-    # get the details of the detected objects
-    v_boxes, v_labels, v_scores = get_boxes(boxes, labels, class_threshold)
-    # summarize what we found
-    for i in range(len(v_boxes)):
-        print(v_labels[i], v_scores[i])
-    # draw what we found
-    draw_boxes(image_path, v_boxes, v_labels, v_scores)
+
+    print(f'loading model...')
+    # load yolov3 model
+    model = models.load_model('weights/yolov3.h5')
+    vid = cv2.VideoCapture(int(video))
+
+    print(f'making predictions...')
+    # load_image(model, img_path)
+    fps = 0.0
+    count = 0
+    _, img = vid.read()
+    while True:
+        cv2.imshow('output', img)
+        _, img = vid.read()
+        if img is None:
+            print('Empty Frame')
+            time.sleep(0.1)
+            count += 1
+            if count < 3:
+                continue
+            else:
+                break
+        img_in = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # load and prepare image
+        img_in, image_w, image_h = load_image_pixels(img_in, (input_w, input_h))
+
+        t1 = time.time()
+        # make prediction
+        yhat = model.predict(img_in)
+        fps = (fps + (1. / (time.time() - t1))) / 2
+
+        # define the probability threshold for detected objects
+        class_threshold = 0.6
+        boxes = list()
+        for i in range(len(yhat)):
+            # decode the output of the network
+            boxes += decode_netout(yhat[i][0], anchors[i], class_threshold, input_h, input_w)
+        # correct the sizes of the bounding boxes for the shape of the image
+        correct_yolo_boxes(boxes, image_h, image_w, input_h, input_w)
+        # suppress non-maximal boxes
+        do_nms(boxes, 0.5)
+        # get the details of the detected objects
+        v_boxes, v_labels, v_scores = get_boxes(boxes, labels, class_threshold)
+        # summarize what we found
+        for i in range(len(v_boxes)):
+            print(v_labels[i], v_scores[i])
+        # draw what we found
+        draw_boxes(img, v_boxes, v_labels, v_scores)
+        img = cv2.putText(img, "FPS: {:.2f}".format(fps), (0, 30),
+                          cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 0, 255), 2)
+
+        # cv2.imshow('output', img)
+        pyplot.show()
+        if cv2.waitKey(1) == ord('q'):
+            break
+
+    cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--path', '-p', type=str, help='path to image')
+    parser.add_argument('--video', '-v', type=int, help='--video 0')
     args = parser.parse_args()
 
-    img_path = args.path
-    print(f'loading model...')
-    # load yolov3 model
-    model = models.load_model('weights/yolov3.h5')
-    print(f'making predictions...')
-    load_image(model, img_path)
+    video = args.video
+    start_camera(video)
